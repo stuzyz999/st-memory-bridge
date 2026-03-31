@@ -185,16 +185,6 @@ const DEFAULT_SETTINGS = {
         keyword: '',
         nonEmptyOnly: true,
         batchSize: 1,
-        stripTagPatterns: [
-            'thinking',
-            'UpdateVariable',
-            'StatusPlaceHolderImpl',
-            'Analysis',
-            'JSONPatch',
-            'content',
-            'time',
-            'recap',
-        ],
     },
     llm: {
         selectedPresetId: 'default',
@@ -293,15 +283,6 @@ const DEFAULT_SETTINGS = {
                 enabled: true,
                 flags: 'gim',
                 scope: 'import',
-            },
-            {
-                id: 'collapse-newlines',
-                name: '合并多余换行',
-                pattern: '\\n{3,}',
-                replacement: '\\n\\n',
-                enabled: true,
-                flags: 'g',
-                scope: 'both',
             }
         ],
     },
@@ -363,7 +344,7 @@ function migrateLegacySettings(settings) {
     if (settings.import && Array.isArray(settings.import.stripTagPatterns) && settings.import.stripTagPatterns.length > 0) {
         settings.import.stripTagPatterns.forEach(tag => {
             if (!tag || typeof tag !== 'string') return;
-            const pattern = `<${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\\\$&')}\\\\b[^>]*>[\\\\s\\\\S]*?</${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\\\$&')}>`;
+            const pattern = `<${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\b[^>]*>[\\s\\S]*?</${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}>`;
             settings.regex.rules.push({
                 id: Date.now() + Math.random().toString(36).substring(2, 9),
                 name: `剥除标签: ${tag}`,
@@ -686,7 +667,10 @@ function normalizeImportSourceText(text, settings) {
         .replace(/\r\n/g, '\n')
         .replace(/\[Start a new chat\]/gi, ' ');
 
-    return applyRegexRules(raw, 'import', s).trim();
+    // 使用 Engram 风格的基础清洗
+    const cleaned = cleanText(raw);
+
+    return applyRegexRules(cleaned, 'import', s).trim();
 }
 
 function applyRegexRules(text, scope, settings = getSettings()) {
@@ -743,7 +727,7 @@ function extractWorldbookSummary(context = SillyTavern.getContext()) {
     return candidates.join(' / ') || '（当前未检测到世界书信息）';
 }
 
-function buildDisclosureInputContext(message, settings = getSettings()) {
+function buildDisclosureInputContext(message) {
     const chatBinding = refreshCurrentChatBinding();
     return {
         input: buildImportContent(message),
@@ -2047,7 +2031,7 @@ async function runSelectedImport() {
             }
             successCount += meaningful.length;
         } catch (error) {
-            meaningful.forEach(m => failures.push(`${batchLabel}: ${getErrorMessage(error)}`));
+            meaningful.forEach(() => failures.push(`${batchLabel}: ${getErrorMessage(error)}`));
         }
     }
 
@@ -2065,7 +2049,13 @@ async function runSelectedImport() {
 function buildInjectedMessage(userInput, memoryContent) {
     if (!memoryContent?.trim()) return userInput;
     const settings = getSettings();
-    const cleanedMemory = applyRegexRules(String(memoryContent || ''), 'recall-inject', settings);
+
+    // 应用正则规则
+    const regexedMemory = applyRegexRules(String(memoryContent || ''), 'recall-inject', settings);
+
+    // 使用 Engram 风格的基础清洗 (如移除多余换行、规范引号)
+    const cleanedMemory = cleanText(regexedMemory);
+
     const tag = getBridgeSettings(settings).injectTag?.trim();
     const block = tag
         ? `\n\n${tag}\n${cleanedMemory.trim()}\n${tag}`
@@ -2479,35 +2469,50 @@ function renderRegexRuleList() {
     }
 
     container.innerHTML = rules.map((rule, index) => `
-        <div class="mb-regex-rule-item" data-index="${index}">
-            <div class="mb-regex-rule-header">
-                <input type="checkbox" class="mb-regex-rule-enabled" ${rule.enabled ? 'checked' : ''} data-index="${index}">
-                <span class="mb-regex-rule-name">${rule.name || '未命名规则'}</span>
-                <div class="mb-regex-rule-actions">
-                    <button class="mb-btn small mb-regex-rule-edit" data-index="${index}">编辑</button>
-                    <button class="mb-btn small mb-regex-rule-delete" data-index="${index}">删除</button>
+        <div class="mb-regex-rule-item ${rule.enabled ? '' : 'is-disabled'}" data-index="${index}">
+            <div class="mb-regex-rule-main">
+                <div class="mb-regex-rule-info">
+                    <div class="mb-regex-rule-title">
+                        <span class="mb-regex-rule-name">${rule.name || '未命名规则'}</span>
+                        <span class="mb-tag small">${rule.scope === 'both' ? '全部' : (rule.scope === 'import' ? '导入' : '召回')}</span>
+                    </div>
+                    <div class="mb-regex-rule-pattern">
+                        <code>/${rule.pattern}/${rule.flags}</code>
+                        <span class="mb-regex-rule-arrow">→</span>
+                        <code>${rule.replacement || '(删除)'}</code>
+                    </div>
                 </div>
-            </div>
-            <div class="mb-regex-rule-meta">
-                <span>作用域: ${rule.scope}</span>
-                <span>模式: <code>${rule.pattern}</code></span>
+                <div class="mb-regex-rule-controls">
+                    <label class="mb-switch">
+                        <input type="checkbox" class="mb-regex-rule-toggle" ${rule.enabled ? 'checked' : ''} data-index="${index}">
+                        <span class="mb-switch-slider"></span>
+                    </label>
+                    <button class="mb-icon-btn mb-regex-rule-edit" title="编辑" data-index="${index}">
+                        <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
+                    <button class="mb-icon-btn mb-regex-rule-delete" title="删除" data-index="${index}">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
             </div>
         </div>
     `).join('');
 
-    container.querySelectorAll('.mb-regex-rule-enabled').forEach(el => {
+    container.querySelectorAll('.mb-regex-rule-toggle').forEach(el => {
         el.addEventListener('change', (e) => {
             const idx = parseInt(e.target.dataset.index, 10);
             const s = getSettings();
             s.regex.rules[idx].enabled = e.target.checked;
             persistSettings(s);
+            renderRegexRuleList();
         });
     });
 
     container.querySelectorAll('.mb-regex-rule-delete').forEach(el => {
         el.addEventListener('click', (e) => {
             const idx = parseInt(e.currentTarget.dataset.index, 10);
-            if (!confirm('确定要删除这条规则吗？')) return;
+            const rules = getSettings().regex.rules;
+            if (!confirm(`确定要删除规则 "${rules[idx].name || '未命名'}" 吗？`)) return;
             const s = getSettings();
             s.regex.rules.splice(idx, 1);
             persistSettings(s);
@@ -2535,36 +2540,106 @@ function showRegexRuleEditor(index = -1) {
         enabled: true
     };
 
-    const name = prompt('规则名称:', rule.name);
-    if (name === null) return;
-    const pattern = prompt('正则表达式 (Pattern):', rule.pattern);
-    if (pattern === null) return;
-    const replacement = prompt('替换内容 (Replacement):', rule.replacement);
-    if (replacement === null) return;
-    const scope = prompt('作用域 (import/recall-inject/both):', rule.scope);
-    if (scope === null) return;
-    const flags = prompt('正则标志 (Flags, 如 gi):', rule.flags || 'gi');
-    if (flags === null) return;
+    const modalHtml = `
+        <div id="mb-regex-editor-modal" class="mb-modal-root">
+            <div class="mb-modal-overlay"></div>
+            <div class="mb-modal-container">
+                <div class="mb-modal-header">
+                    <div class="mb-modal-title">${isNew ? '添加正则规则' : '编辑正则规则'}</div>
+                    <button class="mb-modal-close" id="mb-regex-editor-close">×</button>
+                </div>
+                <div class="mb-modal-body">
+                    <div class="mb-form-group">
+                        <label>规则名称</label>
+                        <input type="text" id="mb-edit-regex-name" value="${rule.name}" placeholder="例如：移除思考过程">
+                    </div>
+                    <div class="mb-form-group">
+                        <label>正则表达式 (Pattern)</label>
+                        <input type="text" id="mb-edit-regex-pattern" class="mb-font-mono" value="${rule.pattern.replace(/"/g, '&quot;')}" placeholder="<think>[\\s\\S]*?<\\/think>">
+                    </div>
+                    <div class="mb-form-group">
+                        <label>替换内容 (Replacement)</label>
+                        <input type="text" id="mb-edit-regex-replacement" class="mb-font-mono" value="${rule.replacement.replace(/"/g, '&quot;')}" placeholder="留空则直接删除">
+                    </div>
+                    <div class="mb-grid-2">
+                        <div class="mb-form-group">
+                            <label>作用域</label>
+                            <select id="mb-edit-regex-scope">
+                                <option value="import" ${rule.scope === 'import' ? 'selected' : ''}>导入 (Import)</option>
+                                <option value="recall-inject" ${rule.scope === 'recall-inject' ? 'selected' : ''}>召回注入 (Recall)</option>
+                                <option value="both" ${rule.scope === 'both' ? 'selected' : ''}>两者 (Both)</option>
+                            </select>
+                        </div>
+                        <div class="mb-form-group">
+                            <label>正则标志 (Flags)</label>
+                            <input type="text" id="mb-edit-regex-flags" value="${rule.flags}" placeholder="gi">
+                        </div>
+                    </div>
+                    <div id="mb-edit-regex-error" class="mb-error-text mb-hidden"></div>
+                </div>
+                <div class="mb-modal-footer">
+                    <button class="mb-btn" id="mb-regex-editor-cancel">取消</button>
+                    <button class="mb-btn primary" id="mb-regex-editor-save">保存</button>
+                </div>
+            </div>
+        </div>
+    `;
 
-    const newRule = {
-        ...rule,
-        name,
-        pattern,
-        replacement,
-        scope,
-        flags,
-        id: rule.id || (Date.now() + Math.random().toString(36).substring(2, 9))
+    const existingModal = document.getElementById('mb-regex-editor-modal');
+    if (existingModal) existingModal.remove();
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modal = document.getElementById('mb-regex-editor-modal');
+
+    const close = () => modal.remove();
+    document.getElementById('mb-regex-editor-close').onclick = close;
+    document.getElementById('mb-regex-editor-cancel').onclick = close;
+    modal.querySelector('.mb-modal-overlay').onclick = close;
+
+    document.getElementById('mb-regex-editor-save').onclick = () => {
+        const name = document.getElementById('mb-edit-regex-name').value.trim();
+        const pattern = document.getElementById('mb-edit-regex-pattern').value.trim();
+        const replacement = document.getElementById('mb-edit-regex-replacement').value;
+        const scope = document.getElementById('mb-edit-regex-scope').value;
+        const flags = document.getElementById('mb-edit-regex-flags').value.trim();
+        const errorEl = document.getElementById('mb-edit-regex-error');
+
+        if (!pattern) {
+            errorEl.textContent = '正则表达式不能为空';
+            errorEl.classList.remove('mb-hidden');
+            return;
+        }
+
+        try {
+            new RegExp(pattern, flags);
+        } catch (e) {
+            errorEl.textContent = '正则表达式非法: ' + e.message;
+            errorEl.classList.remove('mb-hidden');
+            return;
+        }
+
+        const newRule = {
+            ...rule,
+            name: name || '未命名规则',
+            pattern,
+            replacement,
+            scope,
+            flags,
+            id: rule.id || (Date.now() + Math.random().toString(36).substring(2, 9))
+        };
+
+        const currentSettings = getSettings();
+        if (!isNew) {
+            currentSettings.regex.rules[index] = newRule;
+        } else {
+            if (!currentSettings.regex) currentSettings.regex = { rules: [] };
+            currentSettings.regex.rules.push(newRule);
+        }
+
+        persistSettings(currentSettings);
+        renderRegexRuleList();
+        close();
     };
-
-    if (!isNew) {
-        s.regex.rules[index] = newRule;
-    } else {
-        if (!s.regex) s.regex = { rules: [] };
-        s.regex.rules.push(newRule);
-    }
-
-    persistSettings(s);
-    renderRegexRuleList();
 }
 
 function bindRegexEvents() {
@@ -3150,3 +3225,142 @@ jQuery(async () => {
 
     log('Memory Bridge 已加载');
 });
+/**
+ * Engram Processing Utilities (Ported from Engram project)
+ * 提供正则处理、文本清洗、标签捕获和长文本切分功能。
+ */
+
+// ─── 正则处理 (RegexProcessor.ts) ───────────────────────────────────────────
+
+/**
+ * 捕获标签内容
+ * @param {string} text 源文本
+ * @param {string} tagName 标签名 (如 'thought', 'output')
+ * @returns {string|null} 标签内容，未找到返回 null
+ */
+function captureTag(text, tagName) {
+    if (!text) return null;
+    try {
+        // 支持属性和空格: <tag attr="..."> content </tag>
+        const regex = new RegExp(`<${tagName}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${tagName}\\s*>`, 'i');
+        const match = text.match(regex);
+        return match ? match[1].trim() : null;
+    } catch (e) {
+        console.warn('Failed to capture tag:', tagName, e);
+        return null;
+    }
+}
+
+/**
+ * 移除指定标签及其内容
+ * @param {string} text 源文本
+ * @param {string} tagName 标签名
+ * @returns {string} 处理后的文本
+ */
+function removeTag(text, tagName) {
+    if (!text) return '';
+    try {
+        const regex = new RegExp(`<${tagName}(?:\\s+[^>]*)?>[\\s\\S]*?<\\/${tagName}\\s*>`, 'gi');
+        return text.replace(regex, '').trim();
+    } catch (e) {
+        console.warn('Failed to remove tag:', tagName, e);
+        return text;
+    }
+}
+
+/**
+ * 捕获多个标签内容
+ * @param {string} text 源文本
+ * @param {string[]} tagNames 标签名数组
+ * @returns {Object} 标签内容映射
+ */
+function captureTags(text, tagNames) {
+    const result = {};
+    for (const tag of tagNames) {
+        result[tag] = captureTag(text, tag);
+    }
+    return result;
+}
+
+// ─── 文本清洗 (TextProcessor.ts) ────────────────────────────────────────────
+
+const DEFAULT_TRIM_RULES = [
+    { pattern: /\n{3,}/g, replacement: '\n\n' }, // 移除多余空行
+    { pattern: /^[ \t]+|[ \t]+$/gm, replacement: '' }, // 移除行首行尾空白
+    { pattern: /```\w*\n?/g, replacement: '' }, // 移除 Markdown 代码块标记（保留内容）
+    { pattern: /[“”]/g, replacement: '"' }, // 统一中文双引号
+    { pattern: /[‘’]/g, replacement: "'" }, // 统一中文单引号
+];
+
+/**
+ * 清洗文本（移除伪影并规范化空白）
+ * @param {string} text 原始文本
+ * @returns {string} 清洗后的文本
+ */
+function cleanText(text) {
+    if (!text) return '';
+    let result = text;
+    for (const rule of DEFAULT_TRIM_RULES) {
+        result = result.replace(rule.pattern, rule.replacement);
+    }
+    return result.trim();
+}
+
+/**
+ * 提取纯文本（移除所有 Markdown 格式标记和代码块）
+ * @param {string} text 原始文本
+ * @returns {string} 纯文本
+ */
+function extractPlainText(text) {
+    if (!text) return '';
+    return text
+        .replace(/```[\s\S]*?```/g, '') // 移除代码块
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // 移除链接，仅保留文本
+        .replace(/[*_~`#]/g, '') // 移除 Markdown 标记
+        .replace(/\n{2,}/g, '\n') // 压缩换行
+        .trim();
+}
+
+/**
+ * 截断文本到指定长度
+ * @param {string} text 文本
+ * @param {number} maxLength 最大长度
+ * @param {string} suffix 截断后缀 (默认 '...')
+ * @returns {string} 截断后的文本
+ */
+function truncateText(text, maxLength, suffix = '...') {
+    if (!text || text.length <= maxLength) return text;
+    return text.slice(0, maxLength - suffix.length) + suffix;
+}
+
+// ─── 文本分块 (BatchUtils.ts) ──────────────────────────────────────────────
+
+/**
+ * 将长文本切分为带重叠区的小块 (Sliding Window)
+ * @param {string} text 源文本
+ * @param {number} chunkSize 每个块的最大字符数
+ * @param {number} overlapSize 重叠部分的字符数
+ * @returns {string[]} 分块后的文本数组
+ */
+function chunkText(text, chunkSize, overlapSize) {
+    if (!text) return [];
+
+    // 防御性校验：overlapSize >= chunkSize 会导致 start 指针无法前进（死循环）
+    let actualOverlap = overlapSize;
+    if (actualOverlap >= chunkSize) {
+        actualOverlap = Math.max(0, chunkSize - 1);
+    }
+
+    const chunks = [];
+    let start = 0;
+    while (start < text.length) {
+        const end = Math.min(start + chunkSize, text.length);
+        chunks.push(text.slice(start, end));
+
+        start = end - actualOverlap;
+
+        // 如果 start 指针不再前进，或者已经到达文本末尾，则退出
+        if (start >= text.length - actualOverlap) break;
+    }
+    return chunks;
+}
