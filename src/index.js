@@ -2506,7 +2506,7 @@ function injectOptionsMenuEntry() {
 async function mountStandalonePanel() {
     if (panelRoot && panelFab) return;
     const { renderExtensionTemplateAsync } = SillyTavern.getContext();
-    const panelHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'src/panel');
+    const panelHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'panel');
     const wrapper = document.createElement('div');
     wrapper.innerHTML = panelHtml.trim();
     panelRoot = wrapper.querySelector('#memory-bridge-panel-root');
@@ -2985,7 +2985,7 @@ jQuery(async () => {
     refreshCurrentChatBinding();
 
     const { renderExtensionTemplateAsync, eventSource, event_types } = SillyTavern.getContext();
-    const settingsHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'src/settings');
+    const settingsHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'settings');
     $('#extensions_settings2').append(settingsHtml);
 
     try {
