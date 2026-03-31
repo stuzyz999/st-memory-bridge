@@ -45,21 +45,34 @@ const DEFAULT_LLM_PROMPT_TEMPLATES = [
     },
     {
         id: 'recall',
-        label: '召回查询处理指令',
+        label: '召回查询处理指令 (Engram Query Enhance)',
         validator: 'recall',
-        maxTokens: 300,
+        maxTokens: 500,
         systemPrompt: [
             '你是 nocturne_memory 的召回查询整理助手。',
-            '你的职责是把用户输入压缩为适合全文检索的检索查询。',
-            '输出必须服务于关键词命中、人物地点事件关系检索，不要解释。',
+            '你的职责是分析当前剧情涉及的核心人物，生成用于 RAG 检索的结构化查询，召回这些人物之间的历史互动事件与关系细节。',
+            '',
+            '核心准则：',
+            '1. 永远向后看（检索已发生的历史），而非向前看（当前/未来场景）。',
+            '2. 绝对禁止检索当前动作（如挥剑、开门）或物理细节（如剑光、气息）。',
+            '3. 关键词构成：人物名 + 人物名/物品名 + 事件性质 + (可选)模糊时间。',
+            '',
+            '输出格式：',
+            '<think>分析过程</think>',
+            '<query>',
+            '聚焦于某些人物之间发生过什么类型的事',
+            '- 人物A 人物B 事件性质',
+            '</query>',
         ].join('\n'),
         userPromptTemplate: [
-            '请将以下用户输入整理为适合全文检索的召回查询。',
-            '提炼核心人物、地点、事件、关系与关键短语。',
-            '输出单段纯文本查询，不要解释。',
+            '**最近对话历史**:',
+            '{{chatHistory}}',
             '',
-            '用户输入：',
+            '**用户本轮输入**:',
             '{{input}}',
+            '',
+            '---',
+            '请根据以上信息输出扩展后的检索查询词。只输出标签包裹的内容，不要解释。',
         ].join('\n'),
     },
     {
@@ -236,6 +249,60 @@ const DEFAULT_SETTINGS = {
                 flags: 'gi',
                 scope: 'both',
             },
+            {
+                id: 'remove-code-blocks',
+                name: '移除代码块',
+                pattern: '```[\\s\\S]*?```',
+                replacement: ' ',
+                enabled: true,
+                flags: 'gi',
+                scope: 'import',
+            },
+            {
+                id: 'remove-metacognition',
+                name: '移除元认知标签',
+                pattern: '^\\s*\\[metacognition\\]\\s*$',
+                replacement: ' ',
+                enabled: true,
+                flags: 'gim',
+                scope: 'import',
+            },
+            {
+                id: 'remove-details-summary',
+                name: '移除 Details/Summary',
+                pattern: '^\\s*<details><summary>.*?<\\/summary>\\s*$|^\\s*<\\/details>\\s*$',
+                replacement: ' ',
+                enabled: true,
+                flags: 'gim',
+                scope: 'import',
+            },
+            {
+                id: 'remove-prompt-guide-lines',
+                name: '移除提示词引导行',
+                pattern: '^\\s*[-*]\\s*(确认输出语言|必须使用|只写|不写|之前发生了什么|剧情进展到哪里|当前时间|地点|人物关系|角色状态|深度分析|世界如何运转|角色台词与旁白叙事|角色知道什么|当前使用什么文风|上一条内容最后停在哪里|如何自然过渡|是否重复|检查Mingyue输入|当前是否适合推进剧情|结尾是否升华|检查<echo>|角色运行引擎|角色理解|性格融合|场景压力识别|情绪阈值管理|防劣化自检|检查其他细节|小总结准备).*$',
+                replacement: ' ',
+                enabled: true,
+                flags: 'gim',
+                scope: 'import',
+            },
+            {
+                id: 'remove-metadata-lines',
+                name: '移除元数据行(楼层/角色/名称/正文)',
+                pattern: '^\\s*(楼层：#\\d+|角色：.*|名称：.*|正文：)\\s*$',
+                replacement: ' ',
+                enabled: true,
+                flags: 'gim',
+                scope: 'import',
+            },
+            {
+                id: 'collapse-newlines',
+                name: '合并多余换行',
+                pattern: '\\n{3,}',
+                replacement: '\\n\\n',
+                enabled: true,
+                flags: 'g',
+                scope: 'both',
+            }
         ],
     },
     debug: false,
@@ -284,6 +351,14 @@ function migrateLegacySettings(settings) {
     if (!settings.regex || typeof settings.regex !== 'object') {
         settings.regex = { rules: [] };
     }
+
+    // 注入缺失的默认规则
+    const defaultRules = DEFAULT_SETTINGS.regex.rules;
+    defaultRules.forEach(defaultRule => {
+        if (!settings.regex.rules.some(r => r.id === defaultRule.id)) {
+            settings.regex.rules.push({ ...defaultRule });
+        }
+    });
 
     if (settings.import && Array.isArray(settings.import.stripTagPatterns) && settings.import.stripTagPatterns.length > 0) {
         settings.import.stripTagPatterns.forEach(tag => {
@@ -611,18 +686,7 @@ function normalizeImportSourceText(text, settings) {
         .replace(/\r\n/g, '\n')
         .replace(/\[Start a new chat\]/gi, ' ');
 
-    return applyRegexRules(raw, 'import', s)
-        .replace(/```[\s\S]*?```/g, ' ')
-        .replace(/^\s*\[metacognition\]\s*$/gim, ' ')
-        .replace(/^\s*<details><summary>.*?<\/summary>\s*$/gim, ' ')
-        .replace(/^\s*<\/details>\s*$/gim, ' ')
-        .replace(/^\s*[-*]\s*(确认输出语言|必须使用|只写|不写|之前发生了什么|剧情进展到哪里|当前时间|地点|人物关系|角色状态|深度分析|世界如何运转|角色台词与旁白叙事|角色知道什么|当前使用什么文风|上一条内容最后停在哪里|如何自然过渡|是否重复|检查Mingyue输入|当前是否适合推进剧情|结尾是否升华|检查<echo>|角色运行引擎|角色理解|性格融合|场景压力识别|情绪阈值管理|防劣化自检|检查其他细节|小总结准备).*$/gim, ' ')
-        .replace(/^\s*楼层：#\d+\s*$/gim, ' ')
-        .replace(/^\s*角色：.*$/gim, ' ')
-        .replace(/^\s*名称：.*$/gim, ' ')
-        .replace(/^\s*正文：\s*$/gim, ' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+    return applyRegexRules(raw, 'import', s).trim();
 }
 
 function applyRegexRules(text, scope, settings = getSettings()) {
@@ -1303,11 +1367,28 @@ function setConnectionState(state) {
 async function rewriteRecallQuery(input, settings = getSettings()) {
     const normalizedInput = String(input || '').trim();
     if (!normalizedInput) return '';
-    const execution = await executeLlmTask('recall', { input: normalizedInput }, {
+
+    const context = SillyTavern.getContext();
+    const chatHistory = context.chat.slice(-5).map(m => `${m.name}: ${m.mes}`).join('\n');
+
+    const execution = await executeLlmTask('recall', {
+        input: normalizedInput,
+        chatHistory
+    }, {
         settings,
         fallback: () => buildFallbackRecallQuery(normalizedInput),
     }, settings);
-    return execution.ok ? execution.content : buildFallbackRecallQuery(normalizedInput);
+
+    if (!execution.ok) return buildFallbackRecallQuery(normalizedInput);
+
+    const response = execution.content;
+    // Engram 风格解析：优先提取 <query> 标签内容
+    const queryMatch = response.match(/<query>([\s\S]*?)<\/query>/i);
+    if (queryMatch) {
+        return queryMatch[1].trim();
+    }
+
+    return response.trim();
 }
 
 async function recallMemory(query) {
