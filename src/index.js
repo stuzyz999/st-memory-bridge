@@ -2985,7 +2985,7 @@ jQuery(async () => {
     refreshCurrentChatBinding();
 
     const { renderExtensionTemplateAsync, eventSource, event_types } = SillyTavern.getContext();
-    const settingsHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'settings');
+    const settingsHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'src/settings');
     $('#extensions_settings2').append(settingsHtml);
 
     try {
