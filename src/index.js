@@ -207,6 +207,9 @@ const DEFAULT_SETTINGS = {
         selectedTools: {},
         stealth: true,
     },
+    regex: {
+        rules: [],
+    },
     debug: false,
 };
 
@@ -248,6 +251,27 @@ function getDefaultSettings() {
 function migrateLegacySettings(settings) {
     if (!settings || typeof settings !== 'object') {
         return getDefaultSettings();
+    }
+
+    if (!settings.regex || typeof settings.regex !== 'object') {
+        settings.regex = { rules: [] };
+    }
+
+    if (settings.import && Array.isArray(settings.import.stripTagPatterns) && settings.import.stripTagPatterns.length > 0) {
+        settings.import.stripTagPatterns.forEach(tag => {
+            if (!tag || typeof tag !== 'string') return;
+            const pattern = `<${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\\\$&')}\\\\b[^>]*>[\\\\s\\\\S]*?</${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\\\$&')}>`;
+            settings.regex.rules.push({
+                id: Date.now() + Math.random().toString(36).substring(2, 9),
+                name: `剥除标签: ${tag}`,
+                pattern: pattern,
+                replacement: ' ',
+                flags: 'gi',
+                scope: 'import',
+                enabled: true,
+            });
+        });
+        delete settings.import.stripTagPatterns;
     }
 
     if (!settings.connection || typeof settings.connection !== 'object') {
@@ -554,15 +578,12 @@ function buildImportContent(message) {
 }
 
 function normalizeImportSourceText(text, settings) {
-    const imp = getImportSettings(settings || getSettings());
-    const tagList = (imp.stripTagPatterns || []).filter(Boolean);
-    const tagPattern = tagList.length
-        ? new RegExp('<(?:' + tagList.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b[^>]*>[\\s\\S]*?<\/(?:' + tagList.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')>', 'gi')
-        : null;
-    return String(text || '')
+    const s = settings || getSettings();
+    const raw = String(text || '')
         .replace(/\r\n/g, '\n')
-        .replace(/\[Start a new chat\]/gi, ' ')
-        .replace(tagPattern || /(?:)/g, tagPattern ? ' ' : '')
+        .replace(/\[Start a new chat\]/gi, ' ');
+
+    return applyRegexRules(raw, 'import', s)
         .replace(/```[\s\S]*?```/g, ' ')
         .replace(/^\s*\[metacognition\]\s*$/gim, ' ')
         .replace(/^\s*<details><summary>.*?<\/summary>\s*$/gim, ' ')
@@ -574,6 +595,26 @@ function normalizeImportSourceText(text, settings) {
         .replace(/^\s*正文：\s*$/gim, ' ')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+}
+
+function applyRegexRules(text, scope, settings = getSettings()) {
+    if (!text) return '';
+    const rules = settings.regex?.rules || [];
+    let result = text;
+
+    rules.forEach(rule => {
+        if (!rule.enabled) return;
+        if (rule.scope !== 'both' && rule.scope !== scope) return;
+
+        try {
+            const regex = new RegExp(rule.pattern, rule.flags || 'gi');
+            result = result.replace(regex, rule.replacement || '');
+        } catch (e) {
+            console.error(`Regex rule "${rule.name}" failed:`, e);
+        }
+    });
+
+    return result;
 }
 
 function isImportContentMeaningful(text) {
@@ -1914,10 +1955,12 @@ async function runSelectedImport() {
 // ─── 内容注入 ─────────────────────────────────────────────────────────────────
 function buildInjectedMessage(userInput, memoryContent) {
     if (!memoryContent?.trim()) return userInput;
-    const tag = getBridgeSettings().injectTag?.trim();
+    const settings = getSettings();
+    const cleanedMemory = applyRegexRules(String(memoryContent || ''), 'recall-inject', settings);
+    const tag = getBridgeSettings(settings).injectTag?.trim();
     const block = tag
-        ? `\n\n${tag}\n${memoryContent.trim()}\n${tag}`
-        : `\n\n${memoryContent.trim()}`;
+        ? `\n\n${tag}\n${cleanedMemory.trim()}\n${tag}`
+        : `\n\n${cleanedMemory.trim()}`;
     return userInput + block;
 }
 
@@ -2194,6 +2237,7 @@ function refreshPanelState() {
     updateBootStatusUI(lastBootStatusMessage);
     setDisclosurePreview(lastGeneratedDisclosurePreview);
     renderImportList();
+    renderRegexRuleList();
 }
 
 function updateFabVisibility(settings = getSettings()) {
@@ -2315,6 +2359,99 @@ function injectNavButton() {
     updateFabVisibility();
 }
 
+function renderRegexRuleList() {
+    const rules = getSettings().regex?.rules || [];
+    const container = document.getElementById('mb-regex-rule-list');
+    if (!container) return;
+
+    if (rules.length === 0) {
+        container.innerHTML = '<div class="mb-panel-empty-state">暂无正则规则</div>';
+        return;
+    }
+
+    container.innerHTML = rules.map((rule, index) => `
+        <div class="mb-regex-rule-item" data-index="${index}">
+            <div class="mb-regex-rule-header">
+                <input type="checkbox" class="mb-regex-rule-enabled" ${rule.enabled ? 'checked' : ''} data-index="${index}">
+                <span class="mb-regex-rule-name">${rule.name || '未命名规则'}</span>
+                <div class="mb-regex-rule-actions">
+                    <button class="mb-btn small mb-regex-rule-edit" data-index="${index}">编辑</button>
+                    <button class="mb-btn small mb-regex-rule-delete" data-index="${index}">删除</button>
+                </div>
+            </div>
+            <div class="mb-regex-rule-meta">
+                <span>作用域: ${rule.scope}</span>
+                <span>模式: <code>${rule.pattern}</code></span>
+            </div>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.mb-regex-rule-enabled').forEach(el => {
+        el.addEventListener('change', (e) => {
+            const idx = parseInt(e.target.dataset.index, 10);
+            const s = getSettings();
+            s.regex.rules[idx].enabled = e.target.checked;
+            persistSettings(s);
+        });
+    });
+
+    container.querySelectorAll('.mb-regex-rule-delete').forEach(el => {
+        el.addEventListener('click', (e) => {
+            const idx = parseInt(e.currentTarget.dataset.index, 10);
+            if (!confirm('确定要删除这条规则吗？')) return;
+            const s = getSettings();
+            s.regex.rules.splice(idx, 1);
+            persistSettings(s);
+            renderRegexRuleList();
+        });
+    });
+
+    container.querySelectorAll('.mb-regex-rule-edit').forEach(el => {
+        el.addEventListener('click', (e) => {
+            const idx = parseInt(e.currentTarget.dataset.index, 10);
+            showRegexRuleEditor(idx);
+        });
+    });
+}
+
+function showRegexRuleEditor(index = -1) {
+    const s = getSettings();
+    const rule = index >= 0 ? s.regex.rules[index] : {
+        name: '',
+        pattern: '',
+        replacement: '',
+        flags: 'gi',
+        scope: 'import',
+        enabled: true
+    };
+
+    const name = prompt('规则名称:', rule.name);
+    if (name === null) return;
+    const pattern = prompt('正则表达式 (Pattern):', rule.pattern);
+    if (pattern === null) return;
+    const replacement = prompt('替换内容 (Replacement):', rule.replacement);
+    if (replacement === null) return;
+    const scope = prompt('作用域 (import/recall-inject/both):', rule.scope);
+    if (scope === null) return;
+
+    const newRule = { ...rule, name, pattern, replacement, scope };
+    if (index >= 0) {
+        s.regex.rules[index] = newRule;
+    } else {
+        if (!s.regex) s.regex = { rules: [] };
+        s.regex.rules.push({ ...newRule, id: Date.now().toString() });
+    }
+
+    persistSettings(s);
+    renderRegexRuleList();
+}
+
+function bindRegexEvents() {
+    document.getElementById('mb-regex-add-rule')?.addEventListener('click', () => {
+        showRegexRuleEditor();
+    });
+}
+
 function bindWorkspaceActions() {
     panelFab?.addEventListener('click', (event) => {
         if (fabDragState?.dragged) {
@@ -2330,6 +2467,8 @@ function bindWorkspaceActions() {
     panelRoot?.querySelectorAll('.mb-panel-tab').forEach((button) => {
         button.addEventListener('click', () => setPanelTab(button.dataset.mbTab || 'overview'));
     });
+
+    bindRegexEvents();
 
     document.getElementById('mb-panel-refresh')?.addEventListener('click', refreshPanelState);
     document.getElementById('mb-panel-open-settings')?.addEventListener('click', openSettingsDrawer);
@@ -2367,7 +2506,7 @@ function injectOptionsMenuEntry() {
 async function mountStandalonePanel() {
     if (panelRoot && panelFab) return;
     const { renderExtensionTemplateAsync } = SillyTavern.getContext();
-    const panelHtml = await renderExtensionTemplateAsync('third-party/memory-bridge', 'panel');
+    const panelHtml = await renderExtensionTemplateAsync('third-party/memory-bridge/src', 'panel');
     const wrapper = document.createElement('div');
     wrapper.innerHTML = panelHtml.trim();
     panelRoot = wrapper.querySelector('#memory-bridge-panel-root');
@@ -2380,6 +2519,7 @@ async function mountStandalonePanel() {
         applyFabPosition();
     }
     bindWorkspaceActions();
+    bindRegexEvents();
     injectNavButton();
     setPanelTab(getUiSettings().activeTab || currentPanelTab);
     updateFabVisibility();
@@ -2558,7 +2698,6 @@ function loadSettingsToUI() {
     set('mb-import-role-filter', imp.roleFilter);
     set('mb-import-nonempty', imp.nonEmptyOnly);
     set('mb-import-batch-size', imp.batchSize ?? 1);
-    set('mb-import-strip-tags', (imp.stripTagPatterns || []).join('\n'));
     set('mb-work-mode', s.workMode);
     set('mb-connection-mode', connection.mode);
     set('mb-server-url', connection.serverUrl);
@@ -2636,10 +2775,6 @@ function saveSettingsFromUI() {
     if (get('mb-import-nonempty')) imp.nonEmptyOnly = get('mb-import-nonempty').checked;
     const batchSizeEl = get('mb-import-batch-size');
     if (batchSizeEl) imp.batchSize = Math.max(1, parseInt(batchSizeEl.value, 10) || 1);
-    const stripTagsEl = get('mb-import-strip-tags');
-    if (stripTagsEl) {
-        imp.stripTagPatterns = stripTagsEl.value.split(/[\n,]+/).map(t => t.trim()).filter(t => t.length > 0);
-    }
 
     syncCurrentLlmPresetFromUI(s);
     persistSettings(s);
@@ -2713,7 +2848,6 @@ function bindSettingsEvents() {
         'mb-import-role-filter',
         'mb-import-nonempty',
         'mb-import-batch-size',
-        'mb-import-strip-tags',
     ];
     configIds.forEach((id) => {
         const el = document.getElementById(id);

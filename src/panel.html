@@ -11,6 +11,7 @@
         <button class="mb-panel-tab is-active" type="button" data-mb-tab="overview">总览</button>
         <button class="mb-panel-tab" type="button" data-mb-tab="import">导入</button>
         <button class="mb-panel-tab" type="button" data-mb-tab="recall">召回</button>
+        <button class="mb-panel-tab" type="button" data-mb-tab="regex">正则</button>
         <button class="mb-panel-tab" type="button" data-mb-tab="config">配置</button>
       </div>
       <div class="mb-panel-actions">
@@ -130,6 +131,20 @@
           <div class="mb-panel-card">
             <div class="mb-panel-card-title">动态 disclosure 预览</div>
             <pre class="mb-panel-pre" id="mb-panel-disclosure-preview">（尚未生成）</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="mb-panel-section" data-mb-tab-panel="regex">
+        <div class="mb-panel-header-row">
+          <div class="mb-panel-heading">正则清洗规则</div>
+          <button class="mb-btn primary small" type="button" id="mb-regex-add-rule">添加规则</button>
+        </div>
+        <div class="mb-panel-card">
+          <div class="mb-panel-card-desc">定义文本在导入或召回注入前的清洗规则。支持标准的 JavaScript 正则表达式。</div>
+          <div id="mb-regex-rule-list" class="mb-regex-rule-list">
+            <!-- 动态渲染规则列表 -->
+            <div class="mb-panel-empty-state">暂无正则规则</div>
           </div>
         </div>
       </section>
@@ -256,14 +271,7 @@
           <textarea id="mb-llm-recall-prompt" rows="5"></textarea>
         </div>
 
-        <div class="mb-panel-card">
-          <div class="mb-panel-card-title">导入文本清洗</div>
-          <div class="mb-panel-card-desc">导入时自动剥除的 XML 标签名（每行一个或逗号分隔）。匹配开闭标签及其属性，不删除标签内容。</div>
-          <div class="mb-row">
-            <label for="mb-import-strip-tags">剥除标签列表</label>
-          </div>
-          <textarea id="mb-import-strip-tags" rows="4" placeholder="thinking&#10;UpdateVariable&#10;Analysis"></textarea>
-        </div>
+        <!-- 已移除：导入文本清洗卡片已合并至正则标签页 -->
 
         <div class="mb-btn-row">
           <button class="mb-btn primary" type="button" id="mb-panel-go-settings">打开设置抽屉</button>
