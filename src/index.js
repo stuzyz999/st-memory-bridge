@@ -208,7 +208,35 @@ const DEFAULT_SETTINGS = {
         stealth: true,
     },
     regex: {
-        rules: [],
+        rules: [
+            {
+                id: 'remove-think',
+                name: '移除思维链',
+                pattern: '<(think|thinking)(?:\\s+[^>]*)?>[\\s\\S]*?<\\/(think|thinking)\\s*>',
+                replacement: '',
+                enabled: true,
+                flags: 'gi',
+                scope: 'both',
+            },
+            {
+                id: 'remove-headless-think',
+                name: '移除无头思维链',
+                pattern: '[\\s\\S]*?<\\/(think|thinking)\\s*>',
+                replacement: '',
+                enabled: true,
+                flags: 'gi',
+                scope: 'both',
+            },
+            {
+                id: 'remove-update-variable',
+                name: '移除 UpdateVariable',
+                pattern: '<UpdateVariable(?:\\s+[^>]*)?>[\\s\\S]*?<\\/UpdateVariable\\s*>',
+                replacement: '',
+                enabled: true,
+                flags: 'gi',
+                scope: 'both',
+            },
+        ],
     },
     debug: false,
 };
@@ -2416,7 +2444,8 @@ function renderRegexRuleList() {
 
 function showRegexRuleEditor(index = -1) {
     const s = getSettings();
-    const rule = index >= 0 ? s.regex.rules[index] : {
+    const isNew = index < 0;
+    const rule = !isNew ? s.regex.rules[index] : {
         name: '',
         pattern: '',
         replacement: '',
@@ -2433,13 +2462,24 @@ function showRegexRuleEditor(index = -1) {
     if (replacement === null) return;
     const scope = prompt('作用域 (import/recall-inject/both):', rule.scope);
     if (scope === null) return;
+    const flags = prompt('正则标志 (Flags, 如 gi):', rule.flags || 'gi');
+    if (flags === null) return;
 
-    const newRule = { ...rule, name, pattern, replacement, scope };
-    if (index >= 0) {
+    const newRule = {
+        ...rule,
+        name,
+        pattern,
+        replacement,
+        scope,
+        flags,
+        id: rule.id || (Date.now() + Math.random().toString(36).substring(2, 9))
+    };
+
+    if (!isNew) {
         s.regex.rules[index] = newRule;
     } else {
         if (!s.regex) s.regex = { rules: [] };
-        s.regex.rules.push({ ...newRule, id: Date.now().toString() });
+        s.regex.rules.push(newRule);
     }
 
     persistSettings(s);
