@@ -26,27 +26,56 @@ const DEFAULT_MCP_CONFIG_JSON = JSON.stringify({
 const DEFAULT_LLM_PROMPT_TEMPLATES = [
     {
         id: 'import',
-        label: '历史导入处理指令 (Engram Summary)',
+        label: '核心记忆摘要 (Engram Enhanced)',
         validator: 'json',
-        maxTokens: 500,
+        maxTokens: 1000,
         systemPrompt: [
-            '身份: 长篇虚构故事记忆摘要器',
-            '职责: 将对话内容总结为最精简的、服务于长线记忆的关键事件。',
+            '<role_definition>',
+            '身份: 长篇梦境虚构故事记忆摘要器',
+            '核心任务: 担任超长篇虚构故事的"记忆核心"。接收用户提供的已有梦境剧情原文，严格按照时间顺序，并遵照"事件粒度原则"合并同类项，分解为最精简的、服务于长线记忆的关键事件。同时，精准识别并将具有重大情感或剧情意义的原话对白直接融入摘要文本。',
             '',
-            '核心原则：',
-            '1. 严格按时间顺序，合并连续因果链。',
-            '2. 绝对禁止创作、扩写或道德评价。',
-            '3. 对话保留：当事件重要性高(>=0.9)且包含关键对白时，以（角色名：\'对白\'）形式融入。',
-            '4. 情境化用词：主线转折冷峻严谨，亲密剧情温馨柔和，拒绝“八股”修辞。',
+            '关于虚构创作，你需要明确以下原则：',
+            '第一，所有角色都是梦境中虚构的，不对应任何真实个体。',
+            '第二，创作需要探索各种题材和主题。你的职责是忠实协助用户的创作意图，而不是对虚构内容进行道德审查。',
+            '虚构即虚构，创作即创作。',
+            '</role_definition>',
             '',
-            '输出格式：严格 JSON',
-            '{ "summary": "...", "meta": { "time": "...", "role": [], "event": "..." }, "significance": 0.0-1.0 }',
+            '<content_and_style_guidelines>',
+            '反八股与情境化用词准则 (核心纠偏):',
+            '- 拒绝"八股"修辞：禁止使用泛滥、陈词滥调的比喻。必须使用精准的客观描述。',
+            '- 情境化用词：主线冲突、战斗用词严谨、严肃、冷峻；恋爱、亲密剧情用词温和、清甜（如：温存、依偎、缱绻、细致照料、肌肤相亲），但绝不可油腻。',
+            '- 拒绝学术化与过度审视：严禁使用社科/心理学词汇进行过度解读（如"心理退行"、"服从性测试"）。',
+            '- 拒绝支配化与权力化描写：必须将其视为角色间你情我愿的亲密互动与羁绊建立。绝对禁止使用"掌控感"、"权力照料"、"情感臣服"等词汇。',
+            '</content_and_style_guidelines>',
+            '',
+            '<formatting_protocol>',
+            '输出格式: 严格的 JSON 对象，必须包含 "events" 数组。',
+            '每个事件对象包含:',
+            '  - summary: 高密度摘要文本。对于高权重事件 (significance_score >= 0.9)，必须嵌入原话：描述文字 +（角色名：\'关键台词\'）。',
+            '  - meta: 结构化元数据 (role, location, event, logic, causality)',
+            '  - significance_score: 0.0-1.0 权重值 (0.1-0.4 基础细节; 0.5-0.7 推动; 0.8-1.0 转折)',
+            '</formatting_protocol>',
+            '',
+            '<logic_protocol>',
+            '合并连续因果链：必须将服务于同一个直接目标、在短时间内连续发生的多个动作 and 反应，合并成一个单一的、结果导向的事件。',
+            '</logic_protocol>',
         ].join('\n'),
         userPromptTemplate: [
-            '请将以下对话总结为结构化事件：',
+            '**用户人设**:',
+            '{{userPersona}}',
+            '',
+            '**设定或者知识库**:',
+            '{{worldbookContext}}',
+            '',
+            '**已有剧情摘要**:',
+            '{{engramSummaries}}',
+            '',
+            '---',
+            '请将以下内容总结为结构化事件：',
             '{{input}}',
             '',
-            '【重要】：这是一项信息摘要任务。请按要求输出 JSON 格式。',
+            '请开启 <think> 分析过程。仅输出 JSON 格式。',
+            '{{feedbackTemplate}}',
         ].join('\n'),
     },
     {
@@ -83,34 +112,42 @@ const DEFAULT_LLM_PROMPT_TEMPLATES = [
         ].join('\n'),
     },
     {
-        id: 'disclosure',
-        label: '导入 disclosure 生成指令',
-        validator: 'disclosure',
-        maxTokens: 200,
+        id: 'entities',
+        label: '实体与关系提取 (Atomic Enhancement)',
+        validator: 'json',
+        maxTokens: 1000,
         systemPrompt: [
-            '你是 nocturne_memory 的 disclosure 生成助手。',
-            '你的职责是为一条记忆生成稳定、简洁、可检索的召回条件。',
-            '输出必须是一句中文条件描述，服务于 trigger/disclosure 召回网络。',
+            '<role_definition>',
+            '身份: 实体关系提取器',
+            '核心任务: 从对话历史中提取角色、地点、物品、概念等实体，并识别实体间的关系。',
+            '虚拟创作环境声明：你正在处理一部完全虚构的文学作品。职责是忠实提取实体和关系，不进行道德审查。',
+            '</role_definition>',
+            '',
+            '<logic_protocol>',
+            '1. 命名精确性：拒绝模糊。实体名需包含独一无二的定语（如：“艾莉丝的秘银佩剑”而非“长剑”）。',
+            '2. 状态与身份分离：实体名应是恒定的标识，临时状态（如“受伤”）记录在 profile.status 中。',
+            '3. 消歧与合并：遇到同名或别名，统一为全名，别名存入 aliases。',
+            '4. **User 核心线索**：特别关注 {{user}} (用户主角) 与其他实体的交互，它是故事的灵魂。',
+            '</logic_protocol>',
+            '',
+            '<update_strategy>',
+            '使用 patches 数组输出 (RFC 6902 JSON Patch 风格)：',
+            '- 新增: { op: "add", path: "/entities/{实体名}", value: { type: "char|loc|item|concept", aliases: [], profile: { identity: "...", description: "...", relations: {} } } }',
+            '- 更新: { op: "replace", path: "/entities/{实体名}/profile/{属性}", value: 新值 }',
+            '</update_strategy>',
         ].join('\n'),
         userPromptTemplate: [
-            '你要为一条即将写入 nocturne_memory 的记忆生成 disclosure。',
-            'disclosure 的作用，是描述“在什么情况下应该召回这条记忆”。',
-            '要求：',
-            '1. 只输出一句话，不要解释。',
-            '2. 聚焦人物、地点、事件、关系、状态变化、世界线条件。',
-            '3. 不要出现“这条记忆”或“应该召回”这类元话语。',
-            '4. 长度尽量控制在 18 到 48 个字。',
+            '**已有摘要**:',
+            '{{engramSummaries}}',
             '',
-            '聊天绑定：{{chatBinding}}',
-            '角色信息：{{characterInfo}}',
-            '最近上下文：',
-            '{{recentContext}}',
+            '**最近对话历史**:',
+            '{{chatHistory}}',
             '',
-            '世界书摘要：',
-            '{{worldbookSummary}}',
+            '**当前实体状态**:',
+            '{{engramEntityStates}}',
             '',
-            '当前导入楼层：',
-            '{{input}}',
+            '---',
+            '请按 JSON patch 格式对实体和关系数据进行注册和更新。仅提取已有信息，不要编写新剧情。仅输出 JSON。',
         ].join('\n'),
     },
 ];
@@ -193,6 +230,7 @@ const DEFAULT_SETTINGS = {
         keyword: '',
         nonEmptyOnly: true,
         batchSize: 1,
+        enableReview: false, // 默认关闭
     },
     llm: {
         selectedPresetId: 'default',
@@ -644,12 +682,24 @@ function resolveCurrentChatBinding(context = SillyTavern.getContext(), explicitC
     const rawChatId = chatIdCandidates
         .map(value => String(value || '').trim())
         .find(value => value && value !== 'null');
+
+    // 提取角色名称用于 URI 命名空间
+    let charName = 'default';
+    if (context?.characterId != null && context?.characters) {
+        charName = context.characters[context.characterId]?.name || 'default';
+    } else if (context?.name) {
+        charName = context.name;
+    }
+
+    const safeCharName = slugifyChatBinding(charName);
     const bindingSlug = slugifyChatBinding(rawChatId || 'default');
     const label = rawChatId || '未识别聊天';
+
     return {
         rawChatId: rawChatId || '',
         bindingSlug,
-        parentUri: `core://rp/${bindingSlug}`,
+        // 修改为一聊一档路径规则: core://rp/{char_name}/{chat_id}
+        parentUri: `core://rp/${safeCharName}/${bindingSlug}`,
         label,
         source: rawChatId ? 'chat' : 'fallback',
         characterInfo: resolveCharacterInfo(context),
@@ -1406,7 +1456,11 @@ async function rewriteRecallQuery(input, settings = getSettings()) {
     // 1. 解析 <query> 标签
     const queryMatch = response.match(/<query>([\s\S]*?)<\/query>/i);
     if (queryMatch) {
-        result.query = queryMatch[1].trim();
+        // Extract lines and clean up bullets
+        result.query = queryMatch[1].split('\n')
+            .map(line => line.replace(/^[-*•\s]+/, '').trim())
+            .filter(Boolean)
+            .join(' ');
     } else {
         // 后向兼容
         result.query = response.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim();
@@ -1503,6 +1557,19 @@ async function readMemory(uri) {
 }
 
 async function createMemory(args) {
+    const settings = getSettings();
+    const importSettings = getImportSettings(settings);
+
+    if (importSettings.enableReview) {
+        try {
+            const reviewedArgs = await showMemoryReviewDialog(args);
+            if (!reviewedArgs) return null; // 用户取消
+            args = reviewedArgs;
+        } catch (e) {
+            logError('审查对话框异常:', e);
+        }
+    }
+
     try {
         if (!await ensureConnected()) {
             throw new Error(lastErrorMessage || '无法连接到 MCP 服务');
@@ -1516,6 +1583,169 @@ async function createMemory(args) {
         throw err;
     }
 }
+
+/**
+ * 显示记忆审查/重写对话框
+ */
+async function showMemoryReviewDialog(args) {
+    return new Promise((resolve) => {
+        const title = escapeHtml(args.title || '新记忆');
+        const content = args.content || '';
+        const disclosure = escapeHtml(args.disclosure || '');
+        const priority = args.priority || 5;
+
+        // 分离摘要和原文细节
+        const parts = content.split('\n\n[Source Details]\n');
+        const summary = parts[PartIndex.Summary] || '';
+        const sourceDetails = parts[PartIndex.Details] || '';
+
+        const modalHtml = `
+            <div id="mb-review-modal" class="mb-modal-overlay">
+                <div class="mb-modal-content">
+                    <div class="mb-modal-header">
+                        <h3>记忆审查: ${title}</h3>
+                        <span class="mb-modal-close">&times;</span>
+                    </div>
+                    <div class="mb-modal-body">
+                        <div class="mb-form-group">
+                            <label>标题</label>
+                            <input type="text" id="mb-review-title" value="${title}" />
+                        </div>
+                        <div class="mb-form-group">
+                            <label>摘要与细节 (可编辑)</label>
+                            <textarea id="mb-review-summary" rows="6">${summary}</textarea>
+                        </div>
+                        <div class="mb-form-group">
+                            <label>闪回入口 (Disclosure)</label>
+                            <textarea id="mb-review-disclosure" rows="3">${disclosure}</textarea>
+                        </div>
+                        <div class="mb-form-group">
+                            <label>优先级 (1-10)</label>
+                            <input type="number" id="mb-review-priority" min="1" max="10" value="${priority}" />
+                        </div>
+                        ${sourceDetails ? `
+                        <div class="mb-review-source-container">
+                            <details>
+                                <summary>点击查看清洗后的原文细节 (只读)</summary>
+                                <pre class="mb-review-source-text">${escapeHtml(sourceDetails)}</pre>
+                            </details>
+                        </div>
+                        ` : ''}
+                        <div class="mb-form-group mb-review-feedback-section">
+                            <label>重写建议 (由 LLM 重新处理该条记忆)</label>
+                            <textarea id="mb-review-feedback" placeholder="例如：语气再冷酷一点，或者补充缺失的某个关键信息..."></textarea>
+                        </div>
+                    </div>
+                    <div class="mb-modal-footer">
+                        <button id="mb-review-rewrite" class="menu_button">LLM 重写</button>
+                        <div class="mb-modal-footer-right">
+                            <button id="mb-review-cancel" class="menu_button">取消</button>
+                            <button id="mb-review-confirm" class="menu_button menu_button_confirm">确认入库</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const doc = (window.parent || window).document;
+        const container = doc.body;
+        const modalDiv = doc.createElement('div');
+        modalDiv.innerHTML = modalHtml;
+        const modalElement = modalDiv.firstElementChild;
+        container.appendChild(modalElement);
+
+        const close = () => {
+            container.removeChild(modalElement);
+        };
+
+        modalElement.querySelector('.mb-modal-close').onclick = () => { close(); resolve(null); };
+        modalElement.querySelector('#mb-review-cancel').onclick = () => { close(); resolve(null); };
+
+        modalElement.querySelector('#mb-review-confirm').onclick = () => {
+            const result = {
+                ...args,
+                title: modalElement.querySelector('#mb-review-title').value,
+                content: `${modalElement.querySelector('#mb-review-summary').value}\n\n[Source Details]\n${sourceDetails}`,
+                disclosure: modalElement.querySelector('#mb-review-disclosure').value,
+                priority: parseInt(modalElement.querySelector('#mb-review-priority').value, 10) || 5,
+            };
+            close();
+            resolve(result);
+        };
+
+        modalElement.querySelector('#mb-review-rewrite').onclick = async () => {
+            const feedback = modalElement.querySelector('#mb-review-feedback').value.trim();
+            if (!feedback) {
+                toastr.warning('请输入重写建议');
+                return;
+            }
+            modalElement.querySelector('#mb-review-rewrite').disabled = true;
+            modalElement.querySelector('#mb-review-rewrite').innerText = '重写中...';
+
+            try {
+                // 触发携带反馈的重写逻辑
+                const newArgs = await rewriteMemoryWithFeedback(args, feedback, sourceDetails);
+                close();
+                // 递归再次显示审查框
+                resolve(showMemoryReviewDialog(newArgs));
+            } catch (e) {
+                logError('重写失败:', e);
+                modalElement.querySelector('#mb-review-rewrite').disabled = false;
+                modalElement.querySelector('#mb-review-rewrite').innerText = '重写失败，再试一次';
+            }
+        };
+    });
+}
+
+/**
+ * 携带用户反馈重写记忆
+ */
+async function rewriteMemoryWithFeedback(originalArgs, feedback, sourceDetails) {
+    const settings = getSettings();
+    // 复用 import 任务，但在 prompt 末尾注入反馈
+    const execution = await executeLlmTask('import', {
+        input: sourceDetails,
+        userPersona: settings.powerUserSettings?.persona_description || '',
+        worldbookContext: '',
+        engramSummaries: '',
+        // 核心：注入反馈模板
+        feedbackTemplate: `
+---
+【用户反馈 - 请依据此修正上一次的生成】
+上一次的生成内容:
+${originalArgs.content.split('\n\n[Source Details]\n')[PartIndex.Summary]}
+
+用户的修改意见:
+${feedback}
+`
+    }, { settings }, settings);
+
+    if (execution.ok && execution.content) {
+        try {
+            const parsed = JSON.parse(execution.content);
+            const event = parsed.events?.[0] || {};
+
+            // 重新计算 disclosure
+            const disclosure = [
+                ...(event.meta?.logic || []),
+                event.meta?.causality
+            ].filter(Boolean).join('；') || originalArgs.disclosure;
+
+            return {
+                ...originalArgs,
+                content: `${event.summary}\n\n[Source Details]\n${sourceDetails}`,
+                disclosure,
+                priority: Math.round((event.significance_score || 0.5) * 10),
+            };
+        } catch (e) {
+            throw new Error('LLM 输出 JSON 解析失败');
+        }
+    }
+    throw new Error('LLM 重写任务失败');
+}
+
+const PartIndex = { Summary: 0, Details: 1 };
+
 
 function getChatMessagesForImport() {
     const context = SillyTavern.getContext();
@@ -2098,29 +2328,95 @@ async function runSelectedImport() {
         // Build a synthetic message object for LLM tasks
         const syntheticMsg = { ...rep, text: mergedContent };
 
-        const [keywords, disclosure] = await Promise.all([
-            generateImportKeywords(syntheticMsg, settings),
-            generateDisclosure(syntheticMsg, settings),
-        ]);
-        setDisclosurePreview(disclosure);
+        const execution = await executeLlmTask('import', {
+            input: mergedContent,
+            userPersona: settings.powerUserSettings?.persona_description || '',
+            worldbookContext: '', // TODO: Fetch from WorldInfoService if available in ST
+            engramSummaries: '', // Current session summary cache
+        }, { settings }, settings);
 
-        const args = {
-            parent_uri: parentUri,
-            title: getImportTitle(rep.index, settings),
-            content: mergedContent,
-            priority: rep.isUser ? 2 : 3,
-            disclosure,
-        };
-        try {
-            const createResult = await createMemory(args);
-            const createdUriMatch = String(createResult || '').match(/'([^'\n]+:\/\/[^'\n]+)'/);
-            const createdUri = createdUriMatch?.[1] || '';
-            if (createdUri && keywords.length) {
-                await manageMemoryTriggers(createdUri, keywords);
+        let events = [];
+        if (execution.ok && execution.content) {
+            try {
+                const parsed = JSON.parse(execution.content);
+                events = parsed.events || [];
+            } catch (e) {
+                logError('Failed to parse Engram import output:', e);
             }
-            successCount += meaningful.length;
-        } catch (error) {
-            meaningful.forEach(() => failures.push(`${batchLabel}: ${getErrorMessage(error)}`));
+        }
+
+        if (events.length === 0) {
+            // Fallback to old behavior if LLM fails or returns no events
+            const [keywords, disclosure] = await Promise.all([
+                generateImportKeywords(syntheticMsg, settings),
+                generateDisclosure(syntheticMsg, settings),
+            ]);
+            events = [{
+                summary: mergedContent,
+                meta: { event: getImportTitle(rep.index, settings), logic: [] },
+                significance_score: rep.isUser ? 0.6 : 0.4,
+                disclosure,
+                keywords
+            }];
+        }
+
+        for (const event of events) {
+            // --- 实体与关系增量提取 (Atomic Enhancement) ---
+            let patches = [];
+            try {
+                const entityExecution = await executeLlmTask('entities', {
+                    chatHistory: mergedContent,
+                    engramSummaries: event.summary,
+                    engramEntityStates: '', // 后续可对接当前已存实体状态预览
+                }, { settings }, settings);
+
+                if (entityExecution.ok && entityExecution.content) {
+                    const parsedPatches = JSON.parse(entityExecution.content);
+                    patches = parsedPatches.patches || [];
+                }
+            } catch (e) {
+                logError('实体提取失败:', e);
+            }
+
+            const disclosure = event.disclosure || [
+                ...(event.meta?.logic || []),
+                event.meta?.causality
+            ].filter(Boolean).join('；') || 'Chat history segment';
+
+            const args = {
+                parent_uri: parentUri,
+                title: event.meta?.event || getImportTitle(rep.index, settings),
+                // 核心：保留摘要的同时，完整保留本批次的清洗后原文，确保记忆完整度
+                content: `${event.summary}\n\n[Source Details]\n${mergedContent}`,
+                priority: Math.round((event.significance_score || 0.5) * 10),
+                disclosure,
+            };
+            try {
+                const createResult = await createMemory(args);
+                const createdUriMatch = String(createResult || '').match(/'([^'\n]+:\/\/[^'\n]+)'/);
+                const createdUri = createdUriMatch?.[1] || '';
+
+                // --- 自动绑定 GlossaryKeywords (原子化关联) ---
+                const eventKeywords = new Set(event.keywords || []);
+                // 从 meta 标签中自动提取原子
+                if (event.meta?.role) event.meta.role.forEach(r => eventKeywords.add(r));
+                if (event.meta?.location) event.meta.location.forEach(l => eventKeywords.add(l));
+
+                // 处理 patches 中的新实体名作为关键词
+                patches.forEach(p => {
+                    if (p.op === 'add' && p.path.startsWith('/entities/')) {
+                        const name = decodeURIComponent(p.path.split('/').pop());
+                        eventKeywords.add(name);
+                    }
+                });
+
+                if (createdUri && eventKeywords.size > 0) {
+                    await manageMemoryTriggers(createdUri, Array.from(eventKeywords));
+                }
+                successCount += 1;
+            } catch (error) {
+                failures.push(`${batchLabel}: ${getErrorMessage(error)}`);
+            }
         }
     }
 
