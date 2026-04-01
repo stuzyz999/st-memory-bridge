@@ -7,7 +7,7 @@
 - mcp召回优先分析nocturne_memory数据特点，保留细节、入库效率和召回准确率。
 - 参考目标项目做分段提示词，提示词角色定义直接照搬，数据处理核心做独立特化
 - 移植为主，UI适配为辅
-- 绝不开发独立算法
+- 绝不开发独立算法，能复制/能抄，绝不新写
 - 沟通汇报请使用简体中文。
   
 ## 参考项目
@@ -20,7 +20,6 @@
 ### 酒馆助手脚本
 
 - references\参考脚本\index.js，依赖酒馆助手:<https://github.com/N0VI028/JS-Slash-Runner>
--
 
 ## 外部依赖
 
@@ -29,6 +28,8 @@
 - memory-db\nocturne_memory
 
 ### sillytavern mcp 通信后端
+
+- backend\st-memory-gateway
 
 ## sillytavern 插件调试验证工具
 

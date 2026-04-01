@@ -210,9 +210,14 @@
           <div class="mb-panel-card-title">LLM 配置</div>
           <div class="mb-panel-card-desc">配置导入整理、召回查询与 disclosure 生成使用的模型。</div>
           <div class="mb-row">
-            <label for="mb-llm-preset">当前预设</label>
-            <select id="mb-llm-preset"></select>
-            <label><input id="mb-llm-enabled" type="checkbox" /> 启用 LLM</label>
+            <label for="mb-recall-limit">召回数量</label>
+            <input id="mb-recall-limit" type="number" min="1" max="50" step="1" />
+            <label for="mb-recall-alpha">混合权重 (Alpha)</label>
+            <input id="mb-recall-alpha" type="number" min="0" max="1" step="0.1" />
+          </div>
+          <div class="mb-row">
+            <label for="mb-inject-tag">注入标签</label>
+            <input id="mb-inject-tag" type="text" placeholder="[记忆参考]" />
           </div>
           <div class="mb-row">
             <label for="mb-llm-source">模型来源</label>

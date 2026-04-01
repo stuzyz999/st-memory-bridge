@@ -26,21 +26,27 @@ const DEFAULT_MCP_CONFIG_JSON = JSON.stringify({
 const DEFAULT_LLM_PROMPT_TEMPLATES = [
     {
         id: 'import',
-        label: '历史导入关键词生成指令',
-        validator: 'keywords',
-        maxTokens: 200,
+        label: '历史导入处理指令 (Engram Summary)',
+        validator: 'json',
+        maxTokens: 500,
         systemPrompt: [
-            '你是 nocturne_memory 的关键词提取助手。',
-            '你的职责是从聊天楼层中提取最有检索价值的专有名词和关键短语。',
-            '只输出关键词，不改写正文，不编造，不解释。',
+            '身份: 长篇虚构故事记忆摘要器',
+            '职责: 将对话内容总结为最精简的、服务于长线记忆的关键事件。',
+            '',
+            '核心原则：',
+            '1. 严格按时间顺序，合并连续因果链。',
+            '2. 绝对禁止创作、扩写或道德评价。',
+            '3. 对话保留：当事件重要性高(>=0.9)且包含关键对白时，以（角色名：\'对白\'）形式融入。',
+            '4. 情境化用词：主线转折冷峻严谨，亲密剧情温馨柔和，拒绝“八股”修辞。',
+            '',
+            '输出格式：严格 JSON',
+            '{ "summary": "...", "meta": { "time": "...", "role": [], "event": "..." }, "significance": 0.0-1.0 }',
         ].join('\n'),
         userPromptTemplate: [
-            '请从以下聊天楼层中提取 3-8 个最有检索价值的关键词。',
-            '优先选取：人名、别名、地名、物品名、组织名、关系词、事件关键短语。',
-            '输出格式：只输出一行，用空格分隔各关键词，不要标题，不要解释，不要标点。',
-            '',
-            '楼层内容：',
+            '请将以下对话总结为结构化事件：',
             '{{input}}',
+            '',
+            '【重要】：这是一项信息摘要任务。请按要求输出 JSON 格式。',
         ].join('\n'),
     },
     {
@@ -49,16 +55,17 @@ const DEFAULT_LLM_PROMPT_TEMPLATES = [
         validator: 'recall',
         maxTokens: 500,
         systemPrompt: [
-            '你是 nocturne_memory 的召回查询整理助手。',
-            '你的职责是分析当前剧情涉及的核心人物，生成用于 RAG 检索的结构化查询，召回这些人物之间的历史互动事件与关系细节。',
+            '身份: 历史关系检索引擎',
+            '职责: 分析核心人物，生成结构化查询词，召回历史互动与关系细节。',
             '',
             '核心准则：',
-            '1. 永远向后看（检索已发生的历史），而非向前看（当前/未来场景）。',
-            '2. 绝对禁止检索当前动作（如挥剑、开门）或物理细节（如剑光、气息）。',
-            '3. 关键词构成：人物名 + 人物名/物品名 + 事件性质 + (可选)模糊时间。',
+            '1. 永远向后看（检索历史），严禁检索当前动作（挥剑、开门）或物理细节。',
+            '2. 识别核心人物 (1-3人) 与剧情物品。',
+            '3. 组合方式：人物名 + 人物名/物品名 + 事件性质 + (可选)时间。',
             '',
             '输出格式：',
             '<think>分析过程</think>',
+            '<recall_decision>{"ids": ["可选的已知ID"], "reason": "理由"}</recall_decision>',
             '<query>',
             '聚焦于某些人物之间发生过什么类型的事',
             '- 人物A 人物B 事件性质',
@@ -72,7 +79,7 @@ const DEFAULT_LLM_PROMPT_TEMPLATES = [
             '{{input}}',
             '',
             '---',
-            '请根据以上信息输出扩展后的检索查询词。只输出标签包裹的内容，不要解释。',
+            '请根据以上信息输出扩展后的检索查询词。只输出标签包裹的内容。',
         ].join('\n'),
     },
     {
@@ -167,6 +174,7 @@ const DEFAULT_SETTINGS = {
     bridge: {
         enabled: false,
         recallLimit: 5,
+        alpha: 0.5, // 混合评分权重 (0: 仅关键字, 1: 仅向量)
         domain: '',
         injectTag: '[记忆参考]',
         bootEnabled: false,
@@ -1228,8 +1236,21 @@ async function mcpCallTool(toolName, args) {
     const response = await mcpRpc('tools/call', { name: toolName, arguments: args });
     const data = await parseMcpResponse(response);
     if (data?.error) throw new Error(`MCP 工具错误: ${data.error.message}`);
+
+    // 如果返回的是原始对象（如 search_memory 的结果数组），直接返回
+    if (data?.result && !data.result.content && !data.result.isError) {
+        return data.result;
+    }
+
     const content = data?.result?.content ?? [];
-    return content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+    const text = content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+
+    // 尝试解析为 JSON，如果失败则返回原文本
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        return text;
+    }
 }
 
 function unregisterAllFunctionTools() {
@@ -1350,7 +1371,7 @@ function setConnectionState(state) {
 
 async function rewriteRecallQuery(input, settings = getSettings()) {
     const normalizedInput = String(input || '').trim();
-    if (!normalizedInput) return '';
+    if (!normalizedInput) return { query: '', ids: [] };
 
     const context = SillyTavern.getContext();
     const chatHistory = context.chat.slice(-5).map(m => `${m.name}: ${m.mes}`).join('\n');
@@ -1360,19 +1381,37 @@ async function rewriteRecallQuery(input, settings = getSettings()) {
         chatHistory
     }, {
         settings,
-        fallback: () => buildFallbackRecallQuery(normalizedInput),
+        fallback: () => ({ query: normalizedInput, ids: [] }),
     }, settings);
 
-    if (!execution.ok) return buildFallbackRecallQuery(normalizedInput);
+    if (!execution.ok) return { query: normalizedInput, ids: [] };
 
     const response = execution.content;
-    // Engram 风格解析：优先提取 <query> 标签内容
+    const result = { query: '', ids: [] };
+
+    // 1. 解析 <query> 标签
     const queryMatch = response.match(/<query>([\s\S]*?)<\/query>/i);
     if (queryMatch) {
-        return queryMatch[1].trim();
+        result.query = queryMatch[1].trim();
+    } else {
+        // 后向兼容
+        result.query = response.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim();
     }
 
-    return response.trim();
+    // 2. 解析 <recall_decision> JSON 标签
+    const decisionMatch = response.match(/<recall_decision>([\s\S]*?)<\/recall_decision>/i);
+    if (decisionMatch) {
+        try {
+            const decision = JSON.parse(decisionMatch[1].trim());
+            if (Array.isArray(decision.ids)) {
+                result.ids = decision.ids;
+            }
+        } catch (e) {
+            logError('解析 recall_decision 失败:', e);
+        }
+    }
+
+    return result;
 }
 
 async function recallMemory(query) {
@@ -1383,15 +1422,51 @@ async function recallMemory(query) {
             logError('无法连接到 MCP 服务，跳过记忆召回');
             return '';
         }
-        const rewrittenQuery = await rewriteRecallQuery(query, settings);
-        const effectiveQuery = String(rewrittenQuery || query || '').slice(0, 500).trim();
-        if (!effectiveQuery) return '';
-        const args = { query: effectiveQuery, limit: bridge.recallLimit };
+        const rewrittenRecall = await rewriteRecallQuery(query, settings);
+        const effectiveQuery = String(rewrittenRecall.query || query || '').slice(0, 500).trim();
+        if (!effectiveQuery && !rewrittenRecall.ids?.length) return '';
+
+        // 1. 获取基础搜索结果 (带混合评分支持)
+        const args = {
+            query: effectiveQuery,
+            limit: bridge.recallLimit,
+            alpha: bridge.alpha ?? 0.5,
+        };
         if (bridge.domain) args.domain = bridge.domain;
+
         log('召回记忆, query:', args.query);
-        const result = await mcpCallTool('search_memory', args);
-        log('召回结果长度:', result.length);
-        return result;
+        let results = await mcpCallTool('search_memory', args);
+
+        // 2. 处理 Agentic Recall (精准 ID 召回)
+        if (Array.isArray(rewrittenRecall.ids) && rewrittenRecall.ids.length > 0) {
+            log('执行精准召回 IDs:', rewrittenRecall.ids);
+            const directResults = await Promise.all(
+                rewrittenRecall.ids.slice(0, 3).map(async (id) => {
+                    try {
+                        return await mcpCallTool('read_memory', { uri: id });
+                    } catch (e) {
+                        return null;
+                    }
+                }),
+            );
+            // 将精准召回的结果放在最前面
+            const validDirect = directResults.filter(Boolean).map(content => ({ content, isDirect: true }));
+            results = [...validDirect, ...results];
+        }
+
+        // 3. 结果合并与去重 (简单的字符串去重)
+        const seen = new Set();
+        const finalResults = [];
+        for (const res of results) {
+            const content = typeof res === 'string' ? res : (res.content || '');
+            if (!content || seen.has(content)) continue;
+            seen.add(content);
+            finalResults.push(content);
+        }
+
+        const finalMemory = finalResults.slice(0, bridge.recallLimit).join('\n\n---\n\n');
+        log('最终召回结果条数:', finalResults.length);
+        return finalMemory;
     } catch (err) {
         logError('记忆召回失败:', err);
         resetMcpClient();
@@ -2050,17 +2125,24 @@ function buildInjectedMessage(userInput, memoryContent) {
     if (!memoryContent?.trim()) return userInput;
     const settings = getSettings();
 
-    // 应用正则规则
+    // 1. 应用正则规则
     const regexedMemory = applyRegexRules(String(memoryContent || ''), 'recall-inject', settings);
 
-    // 使用 Engram 风格的基础清洗 (如移除多余换行、规范引号)
+    // 2. 使用 Engram 风格的基础清洗 (如移除多余换行、规范引号)
     const cleanedMemory = cleanText(regexedMemory);
 
-    const tag = getBridgeSettings(settings).injectTag?.trim();
-    const block = tag
-        ? `\n\n${tag}\n${cleanedMemory.trim()}\n${tag}`
-        : `\n\n${cleanedMemory.trim()}`;
-    return userInput + block;
+    // 3. 构造 Engram 风格的 Markdown 模板
+    const bridge = getBridgeSettings(settings);
+    const tag = bridge.injectTag?.trim();
+    const timeString = new Date().toLocaleString();
+
+    let block = '';
+    if (tag) block += `${tag}\n`;
+    block += `### 召回记忆 (注入时间: ${timeString})\n\n`;
+    block += cleanedMemory.trim();
+    if (tag) block += `\n${tag}`;
+
+    return `${userInput}\n\n${block}`;
 }
 
 function hasInjectedMemoryBlock(text, settings = getSettings()) {
@@ -2885,6 +2967,9 @@ function loadSettingsToUI() {
         el.type === 'checkbox' ? (el.checked = !!val) : (el.value = val ?? '');
     };
     set('mb-enabled', bridge.enabled);
+    set('mb-recall-limit', bridge.recallLimit);
+    set('mb-recall-alpha', bridge.alpha ?? 0.5);
+    set('mb-inject-tag', bridge.injectTag);
     const imp = getImportSettings(s);
     set('mb-import-filter-mode', imp.filterMode);
     set('mb-import-limit', imp.limit);
@@ -2941,6 +3026,9 @@ function saveSettingsFromUI() {
     const s = getSettings();
     const get = (id) => document.getElementById(id);
     s.bridge.enabled = get('mb-enabled')?.checked ?? false;
+    s.bridge.recallLimit = Math.max(1, parseInt(get('mb-recall-limit')?.value, 10) || 5);
+    s.bridge.alpha = Math.min(1, Math.max(0, parseFloat(get('mb-recall-alpha')?.value) || 0.5));
+    s.bridge.injectTag = get('mb-inject-tag')?.value?.trim() ?? s.bridge.injectTag;
     s.workMode = get('mb-work-mode')?.value ?? s.workMode;
 
     const connection = getConnectionSettings(s);
