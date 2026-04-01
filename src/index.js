@@ -353,8 +353,13 @@ function migrateLegacySettings(settings) {
         settings.import.stripTagPatterns.forEach(tag => {
             if (!tag || typeof tag !== 'string') return;
             const pattern = `<${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\b[^>]*>[\\s\\S]*?</${tag.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}>`;
+
+            // 检查是否已经存在相同模式的规则，避免重复迁移
+            const exists = settings.regex.rules.some(r => r.pattern === pattern);
+            if (exists) return;
+
             settings.regex.rules.push({
-                id: Date.now() + Math.random().toString(36).substring(2, 9),
+                id: `migrate-tag-${tag}-${Math.random().toString(36).substring(2, 5)}`,
                 name: `剥除标签: ${tag}`,
                 pattern: pattern,
                 replacement: ' ',
