@@ -222,7 +222,7 @@ const DEFAULT_SETTINGS = {
         rules: [
             {
                 id: 'remove-think',
-                name: '移除思维链',
+                name: '移除思维链 (think)',
                 pattern: '<(think|thinking)(?:\\s+[^>]*)?>[\\s\\S]*?<\\/(think|thinking)\\s*>',
                 replacement: '',
                 enabled: true,
@@ -231,8 +231,8 @@ const DEFAULT_SETTINGS = {
             },
             {
                 id: 'remove-headless-think',
-                name: '移除无头思维链',
-                pattern: '[\\s\\S]*?<\\/(think|thinking)\\s*>',
+                name: '移除未闭合思维链',
+                pattern: '^(?:[\\s\\S]*?<\\/(?:think|thinking)>)',
                 replacement: '',
                 enabled: true,
                 flags: 'gi',
@@ -240,8 +240,17 @@ const DEFAULT_SETTINGS = {
             },
             {
                 id: 'remove-update-variable',
-                name: '移除 UpdateVariable',
+                name: '移除 UpdateVariable 标签',
                 pattern: '<UpdateVariable(?:\\s+[^>]*)?>[\\s\\S]*?<\\/UpdateVariable\\s*>',
+                replacement: '',
+                enabled: true,
+                flags: 'gi',
+                scope: 'both',
+            },
+            {
+                id: 'remove-engram-tags',
+                name: '移除 Engram 过程标签 (thought/query/decision)',
+                pattern: '<(thought|query|recall_decision|analysis)(?:\\s+[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>',
                 replacement: '',
                 enabled: true,
                 flags: 'gi',
@@ -2732,6 +2741,20 @@ function showRegexRuleEditor(index = -1) {
 function bindRegexEvents() {
     document.getElementById('mb-regex-add-rule')?.addEventListener('click', () => {
         showRegexRuleEditor();
+    });
+    document.getElementById('mb-regex-clear-all')?.addEventListener('click', () => {
+        if (!confirm('确定要清空所有正则规则吗？此操作不可逆。')) return;
+        const s = getSettings();
+        s.regex.rules = [];
+        persistSettings(s);
+        renderRegexRuleList();
+    });
+    document.getElementById('mb-regex-reset-default')?.addEventListener('click', () => {
+        if (!confirm('确定要重置为默认正则规则吗？当前所有自定义规则将被覆盖。')) return;
+        const s = getSettings();
+        s.regex.rules = JSON.parse(JSON.stringify(DEFAULT_SETTINGS.regex.rules));
+        persistSettings(s);
+        renderRegexRuleList();
     });
 }
 

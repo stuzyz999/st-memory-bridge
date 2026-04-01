@@ -138,7 +138,11 @@
       <section class="mb-panel-section" data-mb-tab-panel="regex">
         <div class="mb-panel-header-row">
           <div class="mb-panel-heading">正则清洗规则</div>
-          <button class="mb-btn primary small" type="button" id="mb-regex-add-rule">添加规则</button>
+          <div class="mb-btn-group">
+            <button class="mb-btn small" type="button" id="mb-regex-reset-default">重置默认</button>
+            <button class="mb-btn small" type="button" id="mb-regex-clear-all">清空全部</button>
+            <button class="mb-btn primary small" type="button" id="mb-regex-add-rule">添加规则</button>
+          </div>
         </div>
         <div class="mb-panel-card">
           <div class="mb-panel-card-desc">定义文本在导入或召回注入前的清洗规则。支持标准的 JavaScript 正则表达式。</div>
